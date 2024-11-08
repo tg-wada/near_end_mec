@@ -1,5 +1,5 @@
 # ベースイメージの設定
-FROM pytorch/pytorch:2.0.0-cuda11.7-cudnn8-devel
+FROM pytorch/pytorch:2.0.0
 
 # タイムゾーンの設定
 ENV TZ=Asia/Tokyo
@@ -28,16 +28,17 @@ ENV WORKDIR=${WORKDIR}
 WORKDIR ${WORKDIR}
 
 # 依存関係のインストール
-COPY requirements.txt .
-RUN pip3 install --no-cache-dir -r requirements.txt
-RUN pip install torch==2.0.0 torchvision==0.15.1 torchaudio==2.0.1 --index-url https://download.pytorch.org/whl/cu117
+#COPY requirements.txt .
+#RUN pip3 install --no-cache-dir -r requirements.txt
+#RUN pip install torch==2.0.0 torchvision==0.15.1 torchaudio==2.0.1 --index-url https://download.pytorch.org/whl/cu117
+RUN pip install torch=2.0.0+cpu -f https://download.pytorch.org/whl/torch_stable.html
+RUN pip install torchvision=0.15.1+cpu -f https://download.pytorch.org/whl/torch_stable.html
+RUN pip install tqdm==4.66.2 Pillow==10.2.0 openpyxl==3.1.2 filterpy==1.4.5 scikit-image==0.21.0 scikit-learn==1.4.0 xlsxwriter==3.1.9 einops==0.7.0 kornia==0.7.1 imutils==0.5.4 joblib==1.2.0 numpy==1.24.4 pyyaml==6.0.1 mmcv-full==1.6.2
 
 # mm設定
 WORKDIR /qpp/space
 RUN python -m pip install -U openmim
 RUN mim install mmengine
-ENV FORCE_CUDA="1"
-ENV CUDA_ARCH="5.0 6.0 7.0 7.5 8.0 8.6 9.0"
 
 # scipyのインストール
 RUN pip install scipy
@@ -47,12 +48,6 @@ RUN git clone -b v2.28.2 https://github.com/open-mmlab/mmdetection.git
 WORKDIR /qpp/space/mmdetection
 RUN pip install --no-cache-dir -e . && pip install pre-commit && pre-commit install
 
-# mmposeのセットアップ
-#WORKDIR /qpp/space
-#RUN git clone -b v0.29.0 https://github.com/open-mmlab/mmpose.git /app/space/mmpose
-#WORKDIR /qpp/space/mmpose
-#RUN pip install --no-cache-dir -e . && pip install pre-commit && pre-commit install
-
 # mmtrackingのセットアップ
 WORKDIR /qpp/space
 RUN git clone -b v0.14.0 https://github.com/open-mmlab/mmtracking.git
@@ -60,17 +55,8 @@ WORKDIR /qpp/space/mmtracking
 RUN apt install build-essential libatlas-base-dev gfortran
 RUN pip install -r requirements/build.txt
 RUN pip cache remove scipy
-RUN pip install numpy==1.22  matplotlib
+#RUN pip install numpy==1.22  matplotlib
+RUN pip install matplotlib
 RUN pip install -e .
 
-
-## notebook
-#RUN python3 -m pip install --upgrade pip \
-# && pip install --no-cache-dir \
-#    jupyterlab \
-#    jupyterlab_widgets
-
 WORKDIR /app
-#
-#EXPOSE 8888
-#CMD ["jupyter-lab", "--allow-root", "--ip=0.0.0.0", "--port=8888", "--no-browser", "--NotebookApp.token=''", "--notebook-dir=/app"]
