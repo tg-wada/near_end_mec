@@ -49,8 +49,8 @@ def batch_processing_worker(frame_queue: Queue, model):
             batch.append(frame_data)
 
         tracking_data = []
-        for frame_id, img_data in batch:
-            result = inference_mot(model, img_data, frame_id=frame_id)
+        for frame_id, img_path in batch:  # img_dataをimg_pathに変更
+            result = inference_mot(model, img_path, frame_id=frame_id)  # img_dataの代わりにimg_pathを使用
             frame_info = {"frame_id": frame_id, "persons": []}
 
             if isinstance(result, dict) and 'track_bboxes' in result:
@@ -117,8 +117,10 @@ def main():
             ret, frame = cap.read()
             if not ret:
                 break
-            _, buffer = cv2.imencode('.jpg', frame)
-            frame_queue.put((frame_count, buffer.tobytes()))
+
+            frame_filename = os.path.join(output_dir, f"frame_{frame_count:04d}.jpg")
+            cv2.imwrite(frame_filename, frame)
+            frame_queue.put((frame_count, frame_filename))
             frame_count += 1
             if frame_count % batch_size == 0:
                 time.sleep(1)  # バッチ送信を待つ
