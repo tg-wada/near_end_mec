@@ -1,5 +1,5 @@
 # ベースイメージの設定
-FROM pytorch/pytorch:2.0.0
+FROM python:3.10
 
 # タイムゾーンの設定
 ENV TZ=Asia/Tokyo
@@ -31,8 +31,8 @@ WORKDIR ${WORKDIR}
 #COPY requirements.txt .
 #RUN pip3 install --no-cache-dir -r requirements.txt
 #RUN pip install torch==2.0.0 torchvision==0.15.1 torchaudio==2.0.1 --index-url https://download.pytorch.org/whl/cu117
-RUN pip install torch=2.0.0+cpu -f https://download.pytorch.org/whl/torch_stable.html
-RUN pip install torchvision=0.15.1+cpu -f https://download.pytorch.org/whl/torch_stable.html
+RUN pip install torch==2.0.0+cpu -f https://download.pytorch.org/whl/torch_stable.html
+RUN pip install torchvision==0.15.1+cpu -f https://download.pytorch.org/whl/torch_stable.html
 RUN pip install tqdm==4.66.2 Pillow==10.2.0 openpyxl==3.1.2 filterpy==1.4.5 scikit-image==0.21.0 scikit-learn==1.4.0 xlsxwriter==3.1.9 einops==0.7.0 kornia==0.7.1 imutils==0.5.4 joblib==1.2.0 numpy==1.24.4 pyyaml==6.0.1 mmcv-full==1.6.2
 
 # mm設定
@@ -41,7 +41,7 @@ RUN python -m pip install -U openmim
 RUN mim install mmengine
 
 # scipyのインストール
-RUN pip install scipy
+# RUN pip install scipy
 
 # mmdetectionのセットアップ
 RUN git clone -b v2.28.2 https://github.com/open-mmlab/mmdetection.git
@@ -55,7 +55,7 @@ WORKDIR /qpp/space/mmtracking
 RUN apt install build-essential libatlas-base-dev gfortran
 RUN pip install -r requirements/build.txt
 RUN pip cache remove scipy
-#RUN pip install numpy==1.22  matplotlib
+RUN pip install numpy==1.22  matplotlib
 RUN pip install matplotlib
 RUN pip install -e .
 
