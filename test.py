@@ -1,153 +1,165 @@
 import os
-import cv2
 import time
 import json
-import requests
-import torch
+import cv2
+import mmcv
 import numpy as np
-from collections import deque
-from multiprocessing import Process, Queue, cpu_count
+import torch
+from multiprocessing import Process, Queue
 from mmtrack.apis import inference_mot, init_model
+from collections import deque
 
-# グローバル設定
-rtsp_url = "rtsp://root:root@192.168.5.93/axis-media/media.amp?videocodec=h264"
-output_dir = "output"
-batch_size = 10
-post_url = "http://your-server-endpoint/api"
-distance_threshold = 1.0
-min_bbox_area = 20000
-window_size = 5
-display_duration = 30
-IMG_WIDTH, IMG_HEIGHT = 1920, 1080
-camera_position = (IMG_WIDTH / 2, IMG_HEIGHT)
+# バッチごとに処理したフレームとJSONデータを保存する関数
+def save_json_and_frames(batch_json_data, processed_frames_dir, batch_id):
+    try:
+        os.makedirs(processed_frames_dir, exist_ok=True)
 
-# モデル初期化
-def initialize_model():
-    mot_config = 'mmtracking/configs/mot/bytetrack/bytetrack_yolox_x_crowdhuman_mot17-private-half.py'
-    checkpoint_path = 'checkpoints/bytetrack_yolox_x_crowdhuman_mot17-private-half_20211218_205500-1985c9f0.pth'
-    model = init_model(mot_config, None, device='cpu')
-    checkpoint = torch.load(checkpoint_path, map_location='cpu')
-    state_dict = {k: v for k, v in checkpoint['state_dict'].items() if not k.startswith('ema_')}
-    model.load_state_dict(state_dict, strict=False)
-    model.CLASSES = ('person',)
-    return model
+        # JSONファイルの保存
+        json_file_path = os.path.join(processed_frames_dir, f"batch_{batch_id}_data.json")
+        with open(json_file_path, 'w') as json_file:
+            json.dump(batch_json_data, json_file, indent=4)
+        print(f"[INFO] Saved JSON file: {json_file_path}")
 
-# 距離計算関数
-def calculate_distance(center_x, center_y):
-    return ((center_x - camera_position[0]) ** 2 + (center_y - camera_position[1]) ** 2) ** 0.5
+        # フレームの保存
+        for frame_info in batch_json_data:
+            frame_id = frame_info["frame_id"]
+            frame_data = frame_info.get("image", None)
+            if frame_data is not None:
+                frame_path = os.path.join(processed_frames_dir, f"frame_{frame_id:04d}.jpg")
+                cv2.imwrite(frame_path, frame_data)
+                print(f"[INFO] Saved frame: {frame_path}")
+
+    except Exception as e:
+        print(f"[ERROR] Error saving JSON and frames: {e}")
+
+# 人物の接近を検知
+def calculate_distance_change(distance_queue, current_distance, window_size):
+    if len(distance_queue) >= window_size:
+        distance_queue.popleft()
+    distance_queue.append(current_distance)
+
+    if len(distance_queue) > 1:
+        distance_change = [distance_queue[i] - distance_queue[i - 1] for i in range(1, len(distance_queue))]
+        avg_distance_change = np.mean(distance_change)
+        return avg_distance_change
+    return 0
 
 # バッチ処理ワーカー
-def batch_processing_worker(frame_queue: Queue, model):
-    previous_distances, distance_changes, approaching_frames = {}, {}, {}
-    batch_count = 0
+def batch_processing_worker(frame_queue, result_queue, model, distance_threshold, window_size, min_bbox_area, batch_id):
+    tracking_data = []
+    previous_distances = {}
+    distance_queues = {}
 
-    while True:
-        batch = []
-        while len(batch) < batch_size:
-            frame_data = frame_queue.get()
-            if frame_data is None:
-                return
-            batch.append(frame_data)
+    print(f"[INFO] Starting batch processing for batch {batch_id}")
 
-        tracking_data = []
-        batch_folder = os.path.join(output_dir, f"batch_{batch_count:04d}")
-        os.makedirs(batch_folder, exist_ok=True)
+    while not frame_queue.empty():
+        try:
+            frame_data = frame_queue.get_nowait()
+            frame_id, image = frame_data["frame_id"], frame_data["image"]
 
-        for frame_id, img_path in batch:
-            img = cv2.imread(img_path)
-            result = inference_mot(model, img, frame_id=frame_id)
-            frame_info = {"frame_id": frame_id, "persons": []}
+            print(f"[DEBUG] Processing frame ID: {frame_id}")
 
-            if isinstance(result, dict) and 'track_bboxes' in result:
-                for track in result['track_bboxes']:
-                    if len(track.shape) == 2:
-                        for t in track:
-                            if len(t) < 6:
-                                continue
-                            track_id, x1, y1, x2, y2, score = t
-                            if score < 0.5:
-                                continue
-                            bbox_area = (x2 - x1) * (y2 - y1)
-                            if bbox_area < min_bbox_area:
-                                continue
-                            center_x, center_y = (x1 + x2) / 2, (y1 + y2) / 2
-                            current_distance = calculate_distance(center_x, center_y)
+            # 推論実行
+            result = inference_mot(model, image, frame_id=frame_id)
 
-                            approaching = False
-                            if track_id in previous_distances:
-                                prev_distance = previous_distances[track_id]
-                                distance_change = prev_distance - current_distance
-                                if track_id not in distance_changes:
-                                    distance_changes[track_id] = deque(maxlen=window_size)
-                                distance_changes[track_id].append(distance_change)
+            frame_info = {"frame_id": frame_id, "persons": [], "image": image}
 
-                                avg_distance_change = np.mean(list(distance_changes[track_id])[-window_size:])
-                                if avg_distance_change > distance_threshold:
-                                    approaching_frames[track_id] = display_duration
-                                    approaching = True
-                            previous_distances[track_id] = current_distance
-                            frame_info["persons"].append({
-                                "track_id": int(track_id),
-                                "bbox": [int(x1), int(y1), int(x2), int(y2)],
-                                "approaching": approaching
-                            })
+            if "track_bboxes" in result:
+                for bbox_data in result["track_bboxes"]:
+                    if bbox_data[4] < min_bbox_area:
+                        continue
+
+                    track_id = int(bbox_data[0])
+                    x1, y1, x2, y2 = bbox_data[1:5]
+
+                    center_x, center_y = (x1 + x2) / 2, (y1 + y2) / 2
+                    current_distance = np.sqrt(center_x ** 2 + center_y ** 2)
+
+                    if track_id not in distance_queues:
+                        distance_queues[track_id] = deque(maxlen=window_size)
+
+                    avg_distance_change = calculate_distance_change(distance_queues[track_id], current_distance, window_size)
+                    approaching = avg_distance_change > distance_threshold
+
+                    person_info = {
+                        "track_id": track_id,
+                        "bbox": [int(x1), int(y1), int(x2), int(y2)],
+                        "approaching": approaching,
+                    }
+                    frame_info["persons"].append(person_info)
 
             tracking_data.append(frame_info)
-            # 処理済みフレームをバッチフォルダに移動
-            os.rename(img_path, os.path.join(batch_folder, os.path.basename(img_path)))
 
-        # バッチごとにJSONファイルを保存
-        json_data = json.dumps(tracking_data, indent=4)
-        json_filename = os.path.join(batch_folder, f"tracking_data_batch_{batch_count:04d}.json")
-        with open(json_filename, 'w') as json_file:
-            json_file.write(json_data)
+        except Exception as e:
+            print(f"[ERROR] Error in batch_processing_worker: {e}")
 
-        # JSONファイルをサーバーにPOST送信
-        try:
-            response = requests.post(post_url, data=json_data)
-            response.raise_for_status()
-        except requests.RequestException as e:
-            print(f"Error posting JSON: {e}")
-
-        batch_count += 1
+    print(f"[INFO] Batch {batch_id} processing completed.")
+    result_queue.put((batch_id, tracking_data))
 
 # メイン処理
-def main():
+def main(rtsp_url, output_dir, batch_size, distance_threshold, window_size, min_bbox_area):
     os.makedirs(output_dir, exist_ok=True)
-    model = initialize_model()
 
-    cap = cv2.VideoCapture(rtsp_url)
-    if not cap.isOpened():
-        print("Failed to connect to the camera.")
-        return
+    # モデル初期化
+    config_file = "mmtracking/configs/mot/bytetrack/bytetrack_yolox_x_crowdhuman_mot17-private-half.py"
+    checkpoint_file = "checkpoints/bytetrack_yolox_x_crowdhuman_mot17-private-half_20211218_205500-1985c9f0.pth"
+    model = init_model(config_file, checkpoint_file, device="cpu")
 
     frame_queue = Queue()
-    num_workers = cpu_count()
-    processes = [Process(target=batch_processing_worker, args=(frame_queue, model)) for _ in range(num_workers)]
-    for p in processes:
-        p.start()
+    result_queue = Queue()
+    cap = cv2.VideoCapture(rtsp_url)
 
-    frame_count = 0
+    batch_id = 0
+    processed_frames_dir = os.path.join(output_dir, "processed_frames")
+
     try:
+        print("[INFO] Starting frame capture...")
         while True:
             ret, frame = cap.read()
             if not ret:
+                print("[ERROR] Failed to capture frame.")
                 break
 
-            # フレームを保存し、キューに入れる
-            frame_filename = os.path.join(output_dir, f"frame_{frame_count:04d}.jpg")
-            cv2.imwrite(frame_filename, frame)
-            frame_queue.put((frame_count, frame_filename))
-            frame_count += 1
+            # フレームをキューに追加
+            frame_queue.put({"frame_id": batch_id, "image": frame})
+            batch_id += 1
 
-            if frame_count % batch_size == 0:
-                time.sleep(1)  # 次のバッチ処理待機
+            # バッチ処理
+            if frame_queue.qsize() >= batch_size:
+                print(f"[INFO] Initiating batch {batch_id}...")
+                process = Process(
+                    target=batch_processing_worker,
+                    args=(
+                        frame_queue,
+                        result_queue,
+                        model,
+                        distance_threshold,
+                        window_size,
+                        min_bbox_area,
+                        batch_id,
+                    ),
+                )
+                process.start()
+                process.join()
+
+                # 結果を取得して保存
+                while not result_queue.empty():
+                    batch_id, batch_json_data = result_queue.get()
+                    print(f"[INFO] Received batch {batch_id} result.")
+                    save_json_and_frames(batch_json_data, processed_frames_dir, batch_id)
+
+    except Exception as e:
+        print(f"[ERROR] Main process encountered an error: {e}")
+
     finally:
         cap.release()
-        for _ in range(num_workers):
-            frame_queue.put(None)
-        for p in processes:
-            p.join()
+        print("[INFO] Processing complete.")
 
 if __name__ == "__main__":
-    main()
+    rtsp_url = "rtsp://root:root@192.168.5.93/axis-media/media.amp?videocodec=h264"
+    output_dir = "output"
+    batch_size = 30
+    distance_threshold = 5
+    window_size = 5
+    min_bbox_area = 20000
+    main(rtsp_url, output_dir, batch_size, distance_threshold, window_size, min_bbox_area)
