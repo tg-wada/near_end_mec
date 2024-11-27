@@ -91,7 +91,13 @@ def batch_processing_worker(batch_queue, model, batch_output_dir):
                     continue
 
                 # 推論を実行
-                result = inference_mot(model, frame, frame_id=frame_id)
+                try:
+                    result = inference_mot(model, frame, frame_id=frame_id)
+                    print(f"[DEBUG] Inference result for frame {frame_id}: {result}")  # 推論結果をデバッグログ出力
+                except Exception as e:
+                    print(f"[ERROR] Inference failed for frame {frame_id}: {str(e)}")
+                    continue
+
                 if not result or 'track_bboxes' not in result:
                     print(f"[WARNING] No tracking data for frame {frame_id}.")
                     continue
@@ -145,12 +151,18 @@ def batch_processing_worker(batch_queue, model, batch_output_dir):
                 results.append(frame_results)
 
             # JSONファイルの保存
-            batch_id = batch_data[0][0] // BATCH_SIZE
-            json_path = os.path.join(batch_output_dir, f"batch_{batch_id:03d}.json")
-            with open(json_path, "w") as json_file:
-                json.dump(results, json_file, indent=4)
+            if results:
+                batch_id = batch_data[0][0] // BATCH_SIZE
+                json_path = os.path.join(batch_output_dir, f"batch_{batch_id:03d}.json")
+                try:
+                    with open(json_path, "w") as json_file:
+                        json.dump(results, json_file, indent=4)
+                    print(f"[INFO] Batch {batch_id} processed and saved to {json_path}")
+                except Exception as e:
+                    print(f"[ERROR] Failed to save JSON for batch {batch_id}: {str(e)}")
+            else:
+                print("[WARNING] No results to save for this batch.")
 
-            print(f"[INFO] Batch {batch_id} processed and saved to {json_path}")
         except Exception as e:
             print(f"[ERROR] Error processing batch: {str(e)}")
 
