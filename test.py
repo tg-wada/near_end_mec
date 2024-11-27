@@ -6,6 +6,15 @@ import json
 from collections import deque
 import numpy as np
 import time
+import signal
+
+# タイムアウト例外
+class TimeoutException(Exception):
+    pass
+
+# タイムアウトハンドラ
+def timeout_handler(signum, frame):
+    raise TimeoutException("Inference timed out")
 
 # RTSP URLと出力ディレクトリ
 rtsp_url = "rtsp://root:root@192.168.5.93/axis-media/media.amp?videocodec=h264"
@@ -111,11 +120,23 @@ def batch_processing_worker(batch_queue, model, batch_output_dir):
                 # 推論を実行
                 try:
                     print(f"[DEBUG] Running inference for frame {frame_id}...")
+
+                    # タイムアウト設定
+                    signal.signal(signal.SIGALRM, timeout_handler)
+                    signal.alarm(10)  # 10秒のタイムアウト設定
+
                     result = inference_mot(model, frame, frame_id=frame_id)
+                    signal.alarm(0)  # タイムアウト解除
+
                     if result:
                         print(f"[DEBUG] Inference result for frame {frame_id}: {result}")
                     else:
                         print(f"[WARNING] No result returned for frame {frame_id}.")
+                        continue
+
+                except TimeoutException:
+                    print(f"[ERROR] Inference timed out for frame {frame_id}. Skipping.")
+                    continue
                 except Exception as e:
                     print(f"[ERROR] Inference failed for frame {frame_id}: {str(e)}")
                     continue
@@ -187,6 +208,7 @@ def batch_processing_worker(batch_queue, model, batch_output_dir):
 
         except Exception as e:
             print(f"[ERROR] Error processing batch: {str(e)}")
+
 
 def create_directories():
     """必要なディレクトリを作成します。"""
