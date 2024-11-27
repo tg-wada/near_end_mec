@@ -118,6 +118,11 @@ def batch_processing_worker(batch_queue, model, batch_output_dir):
                         print(f"[ERROR] Failed to read frame: {frame_path}. Skipping.")
                         continue
 
+                    # デバッグ用：推論に渡すフレームを保存
+                    debug_frame_path = f"debug_frame_{frame_id:06d}.jpg"
+                    cv2.imwrite(debug_frame_path, frame)
+                    print(f"[DEBUG] Saved frame {frame_id} for debugging at {debug_frame_path}")
+
                     # 推論を実行
                     print(f"[DEBUG] Running inference for frame {frame_id}...")
                     try:
