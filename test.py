@@ -166,7 +166,6 @@ def batch_processing_worker(batch_queue, model, batch_output_dir):
         except Exception as e:
             print(f"[ERROR] Error processing batch: {str(e)}")
 
-
 def create_directories():
     """必要なディレクトリを作成します。"""
     if not os.path.exists(output_dir):
