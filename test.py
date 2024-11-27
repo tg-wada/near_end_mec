@@ -31,7 +31,7 @@ def smooth_distance_change(distance_changes, window_size=5):
     return np.mean(list(distance_changes)[-window_size:])
 
 # フレーム取得
-def frame_capture(rtsp_url, frame_queue, batch_size):
+def frame_capture(rtsp_url, frame_queue, batch_size, output_dir):
     logging.info("Starting frame capture...")
     cap = cv2.VideoCapture(rtsp_url)
     if not cap.isOpened():
@@ -40,7 +40,7 @@ def frame_capture(rtsp_url, frame_queue, batch_size):
     
     frame_id = 0
     batch_id = 0
-    batch_folder = f"batch_{batch_id:03d}"
+    batch_folder = os.path.join(output_dir, f"batch_{batch_id:03d}")
     os.makedirs(batch_folder, exist_ok=True)
 
     while True:
@@ -56,7 +56,7 @@ def frame_capture(rtsp_url, frame_queue, batch_size):
         frame_id += 1
         if frame_id % batch_size == 0:
             batch_id += 1
-            batch_folder = f"batch_{batch_id:03d}"
+            batch_folder = os.path.join(output_dir, f"batch_{batch_id:03d}")
             os.makedirs(batch_folder, exist_ok=True)
             logging.info(f"Initiating batch {batch_id}...")
 
@@ -65,6 +65,9 @@ def frame_capture(rtsp_url, frame_queue, batch_size):
 # バッチ処理
 def batch_processing_worker(frame_queue, output_dir, model, distance_threshold, min_bbox_area, window_size):
     logging.info("Starting batch processing...")
+    previous_distances = {}
+    distance_changes = {}
+
     while True:
         if frame_queue.empty():
             time.sleep(1)
@@ -142,8 +145,8 @@ def batch_processing_worker(frame_queue, output_dir, model, distance_threshold, 
 def main():
     setup_logging()
     parser = argparse.ArgumentParser(description="Run real-time person tracking with batch processing.")
-    parser.add_argument("--rtsp_url", type=str, required=True, help="RTSP URL of the camera.")
-    parser.add_argument("--output_dir", type=str, required=True, help="Directory to save JSON files and frames.")
+    parser.add_argument("--rtsp_url", type=str, default="rtsp://root:root@192.168.5.93/axis-media/media.amp?videocodec=h264", help="RTSP URL of the camera.")
+    parser.add_argument("--output_dir", type=str, default="./output", help="Directory to save JSON files and frames.")
     parser.add_argument("--distance_threshold", type=float, default=1.0, help="Threshold for detecting approaching persons.")
     parser.add_argument("--min_bbox_area", type=int, default=20000, help="Minimum bounding box area to consider.")
     parser.add_argument("--window_size", type=int, default=5, help="Window size for smoothing distance changes.")
@@ -158,7 +161,7 @@ def main():
     model = init_model(mot_config, mot_checkpoint, device="cpu")
 
     frame_queue = Queue()
-    Process(target=frame_capture, args=(args.rtsp_url, frame_queue, args.batch_size)).start()
+    Process(target=frame_capture, args=(args.rtsp_url, frame_queue, args.batch_size, args.output_dir)).start()
     Process(target=batch_processing_worker, args=(
         frame_queue, args.output_dir, model, args.distance_threshold, args.min_bbox_area, args.window_size
     )).start()
