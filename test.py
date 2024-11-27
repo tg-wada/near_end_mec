@@ -69,8 +69,26 @@ def frame_capture(rtsp_url, frame_queue):
     print("[INFO] Frame capture complete.")
 
 
+def initialize_model():
+    """モデルの初期化を行います。"""
+    try:
+        mot_config = "mmtracking/configs/mot/bytetrack/bytetrack_yolox_x_crowdhuman_mot17-private-half.py"
+        mot_checkpoint = "checkpoints/bytetrack_yolox_x_crowdhuman_mot17-private-half_20211218_205500-1985c9f0.pth"
+        model = init_model(mot_config, mot_checkpoint, device="cpu")
+        model.CLASSES = ('person',)
+        print("[INFO] Model initialized.")
+        return model
+    except Exception as e:
+        print(f"[ERROR] Model initialization failed: {str(e)}")
+        return None
+
+
 def batch_processing_worker(batch_queue, model, batch_output_dir):
     """バッチ処理を実行し、接近検知結果を含むJSONファイルを保存します。"""
+    if model is None:
+        print("[ERROR] Model is not initialized. Exiting worker.")
+        return
+
     previous_distances = {}
     distance_changes = {}
 
@@ -92,8 +110,12 @@ def batch_processing_worker(batch_queue, model, batch_output_dir):
 
                 # 推論を実行
                 try:
+                    print(f"[DEBUG] Running inference for frame {frame_id}...")
                     result = inference_mot(model, frame, frame_id=frame_id)
-                    print(f"[DEBUG] Inference result for frame {frame_id}: {result}")  # 推論結果をデバッグログ出力
+                    if result:
+                        print(f"[DEBUG] Inference result for frame {frame_id}: {result}")
+                    else:
+                        print(f"[WARNING] No result returned for frame {frame_id}.")
                 except Exception as e:
                     print(f"[ERROR] Inference failed for frame {frame_id}: {str(e)}")
                     continue
@@ -174,16 +196,6 @@ def create_directories():
     batch_output_dir = os.path.join(output_dir, "batch_results")
     os.makedirs(batch_output_dir, exist_ok=True)
     return batch_output_dir
-
-
-def initialize_model():
-    """モデルの初期化を行います。"""
-    mot_config = "mmtracking/configs/mot/bytetrack/bytetrack_yolox_x_crowdhuman_mot17-private-half.py"
-    mot_checkpoint = "checkpoints/bytetrack_yolox_x_crowdhuman_mot17-private-half_20211218_205500-1985c9f0.pth"
-    model = init_model(mot_config, mot_checkpoint, device="cpu")
-    model.CLASSES = ('person',)
-    print("[INFO] Model initialized.")
-    return model
 
 
 def main():
