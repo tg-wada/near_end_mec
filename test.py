@@ -1,7 +1,5 @@
-import argparse
 import os
 import cv2
-import time
 import mmcv
 from multiprocessing import Process, Queue, cpu_count
 import json
@@ -155,9 +153,8 @@ def main(rtsp_url, output_dir, batch_size, distance_threshold, min_bbox_area, wi
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Run person tracking from RTSP stream.")
-    parser.add_argument("--rtsp_url", type=str, required=True, help="RTSP stream URL.")
-    parser.add_argument("--output_dir", type=str, required=True, help="Directory to save frames and results.")
+    parser.add_argument("--rtsp_url", type=str, default="rtsp://root:root@192.168.5.93/axis-media/media.amp?videocodec=h264", help="RTSP URL of the camera.")
+    parser.add_argument("--output_dir", type=str, default="./output", help="Directory to save JSON files and frames.")
     parser.add_argument("--batch_size", type=int, default=30, help="Number of frames per batch.")
     parser.add_argument("--distance_threshold", type=float, default=1, help="Threshold for detecting approaching objects.")
     parser.add_argument("--min_bbox_area", type=int, default=20000, help="Minimum bounding box area to consider.")
