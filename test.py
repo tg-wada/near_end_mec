@@ -6,10 +6,10 @@ import mmcv
 import numpy as np
 import logging
 from collections import deque
-from multiprocessing import Process, Queue
+from multiprocessing import Process, Queue, cpu_count
 from tqdm import tqdm
 import json
-import shutil
+from mmtrack.apis import inference_mot, init_model
 
 # カメラの設定
 IMG_WIDTH = 1920
@@ -63,8 +63,8 @@ def frame_capture(rtsp_url, frame_queue, batch_size, output_dir):
     cap.release()
 
 # バッチ処理
-def batch_processing_worker(frame_queue, output_dir, model, distance_threshold, min_bbox_area, window_size):
-    logging.info("Starting batch processing...")
+def batch_processing_worker(worker_id, frame_queue, output_dir, model, distance_threshold, min_bbox_area, window_size):
+    logging.info(f"Worker {worker_id} starting batch processing...")
     previous_distances = {}
     distance_changes = {}
 
@@ -82,7 +82,7 @@ def batch_processing_worker(frame_queue, output_dir, model, distance_threshold, 
         if not batch:
             continue
 
-        logging.info(f"Processing batch with {len(batch)} frames...")
+        logging.info(f"Worker {worker_id} processing batch with {len(batch)} frames...")
         batch_data = []
         for frame_data in batch:
             try:
@@ -91,7 +91,7 @@ def batch_processing_worker(frame_queue, output_dir, model, distance_threshold, 
                 img = mmcv.imread(frame_path)
 
                 result = inference_mot(model, img, frame_id=frame_id)
-                logging.debug(f"Processed frame {frame_id}")
+                logging.debug(f"Worker {worker_id} processed frame {frame_id}")
 
                 frame_info = {"frame_id": frame_id, "persons": []}
 
@@ -135,12 +135,12 @@ def batch_processing_worker(frame_queue, output_dir, model, distance_threshold, 
                 batch_data.append(frame_info)
 
             except Exception as e:
-                logging.error(f"Error processing frame {frame_data['frame_id']}: {e}")
+                logging.error(f"Worker {worker_id} error processing frame {frame_data['frame_id']}: {e}")
 
         batch_json_path = os.path.join(output_dir, f"batch_{batch[0]['frame_id']}_data.json")
         with open(batch_json_path, "w") as f:
             json.dump(batch_data, f, indent=4)
-        logging.info(f"Batch JSON saved: {batch_json_path}")
+        logging.info(f"Worker {worker_id} saved batch JSON: {batch_json_path}")
 
 def main():
     setup_logging()
@@ -162,9 +162,13 @@ def main():
 
     frame_queue = Queue()
     Process(target=frame_capture, args=(args.rtsp_url, frame_queue, args.batch_size, args.output_dir)).start()
-    Process(target=batch_processing_worker, args=(
-        frame_queue, args.output_dir, model, args.distance_threshold, args.min_bbox_area, args.window_size
-    )).start()
+
+    num_cores = cpu_count()  # 利用可能なコア数を取得
+    logging.info(f"Detected {num_cores} CPU cores. Spawning workers...")
+    for worker_id in range(num_cores):
+        Process(target=batch_processing_worker, args=(
+            worker_id, frame_queue, args.output_dir, model, args.distance_threshold, args.min_bbox_area, args.window_size
+        )).start()
 
 if __name__ == "__main__":
     main()
