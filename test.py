@@ -1,6 +1,5 @@
 import cv2
 import os
-import time
 from multiprocessing import Process, Queue, cpu_count
 from tqdm import tqdm
 from mmtrack.apis import inference_mot, init_model
@@ -14,7 +13,7 @@ output_dir = "output_frames"
 os.makedirs(output_dir, exist_ok=True)
 
 # バッチサイズ設定
-BATCH_SIZE = 30
+BATCH_SIZE = 20
 # カメラ位置設定
 IMG_WIDTH = 1920
 IMG_HEIGHT = 1080
@@ -22,7 +21,7 @@ camera_position = (IMG_WIDTH / 2, IMG_HEIGHT)
 # 接近検知閾値
 DISTANCE_THRESHOLD = 20
 WINDOW_SIZE = 5
-MIN_BBOX_AREA = 2000
+MIN_BBOX_AREA = 20000
 
 
 def calculate_distance(center_x, center_y):
