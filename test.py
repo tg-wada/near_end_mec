@@ -1,11 +1,11 @@
 import cv2
 import os
 from multiprocessing import Process, Queue, cpu_count
-from tqdm import tqdm
 from mmtrack.apis import inference_mot, init_model
 import json
 from collections import deque
 import numpy as np
+import time
 
 # RTSP URLと出力ディレクトリ
 rtsp_url = "rtsp://root:root@192.168.5.93/axis-media/media.amp?videocodec=h264"
@@ -51,13 +51,22 @@ def frame_capture(rtsp_url, frame_queue):
             print("[INFO] No frame received. Exiting...")
             break
 
+        # キューが満杯の時は待機
+        while frame_queue.full():
+            print("[INFO] Frame queue is full. Waiting...")
+            time.sleep(0.1)
+
+        # フレーム保存とキュー送信
         frame_path = os.path.join(output_dir, f"frame_{frame_id:06d}.jpg")
         cv2.imwrite(frame_path, frame)
         frame_queue.put((frame_id, frame_path))
         print(f"[INFO] Captured frame {frame_id}")
         frame_id += 1
 
+    # 終了を通知
+    frame_queue.put(None)
     cap.release()
+    print("[INFO] Frame capture complete.")
 
 
 def batch_processing_worker(batch_queue, model, batch_output_dir):
@@ -68,17 +77,27 @@ def batch_processing_worker(batch_queue, model, batch_output_dir):
     while True:
         batch_data = batch_queue.get()
         if batch_data is None:
+            print("[INFO] Worker received termination signal. Exiting.")
             break
 
-        print(f"[INFO] Processing batch with {len(batch_data)} frames...")
-        results = []
-        for frame_id, frame_path in batch_data:
-            frame = cv2.imread(frame_path)
-            result = inference_mot(model, frame, frame_id=frame_id)
+        try:
+            print(f"[INFO] Processing batch with {len(batch_data)} frames...")
+            results = []
+            for frame_id, frame_path in batch_data:
+                # フレームを読み込む
+                frame = cv2.imread(frame_path)
+                if frame is None:
+                    print(f"[ERROR] Failed to read frame: {frame_path}")
+                    continue
 
-            # フレームごとの接近情報を生成
-            frame_results = {"frame_id": frame_id, "persons": []}
-            if 'track_bboxes' in result:
+                # 推論を実行
+                result = inference_mot(model, frame, frame_id=frame_id)
+                if not result or 'track_bboxes' not in result:
+                    print(f"[WARNING] No tracking data for frame {frame_id}.")
+                    continue
+
+                # フレームごとの接近情報を生成
+                frame_results = {"frame_id": frame_id, "persons": []}
                 for track in result['track_bboxes']:
                     if len(track.shape) == 2:
                         for t in track:
@@ -122,15 +141,18 @@ def batch_processing_worker(batch_queue, model, batch_output_dir):
                                 "approaching": approaching
                             })
 
-            results.append(frame_results)
+                # フレーム結果を追加
+                results.append(frame_results)
 
-        # JSONファイルの保存
-        batch_id = batch_data[0][0] // BATCH_SIZE
-        json_path = os.path.join(batch_output_dir, f"batch_{batch_id:03d}.json")
-        with open(json_path, "w") as json_file:
-            json.dump(results, json_file, indent=4)
+            # JSONファイルの保存
+            batch_id = batch_data[0][0] // BATCH_SIZE
+            json_path = os.path.join(batch_output_dir, f"batch_{batch_id:03d}.json")
+            with open(json_path, "w") as json_file:
+                json.dump(results, json_file, indent=4)
 
-        print(f"[INFO] Batch {batch_id} processed and saved to {json_path}")
+            print(f"[INFO] Batch {batch_id} processed and saved to {json_path}")
+        except Exception as e:
+            print(f"[ERROR] Error processing batch: {str(e)}")
 
 
 def create_directories():
@@ -176,28 +198,36 @@ def main():
         worker.start()
         workers.append(worker)
 
+    # フレームキューからバッチ作成
     batch = []
     while True:
         try:
-            frame_id, frame_path = frame_queue.get(timeout=5)
-            batch.append((frame_id, frame_path))
+            item = frame_queue.get(timeout=5)  # 5秒間データを待つ
+            if item is None:  # 終了通知
+                print("[INFO] Frame capture finished. Finalizing batches...")
+                if batch:  # 残ったバッチを処理
+                    batch_queue.put(batch)
+                break
 
+            batch.append(item)
+
+            # バッチが完成したら送信
             if len(batch) == BATCH_SIZE:
                 batch_queue.put(batch)
                 print(f"[INFO] Batch of {BATCH_SIZE} frames queued for processing.")
                 batch = []
 
         except Exception:
-            print("[INFO] Frame queue is empty. Finalizing batches...")
+            print("[INFO] Frame queue is empty or timed out. Finalizing batches...")
             if batch:
                 batch_queue.put(batch)
                 batch = []
             break
 
+    # ワーカー終了処理
     capture_process.join()
-
     for _ in workers:
-        batch_queue.put(None)
+        batch_queue.put(None)  # ワーカー終了通知
     for worker in workers:
         worker.join()
 
