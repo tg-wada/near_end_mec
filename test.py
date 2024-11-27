@@ -120,62 +120,68 @@ def batch_processing_worker(batch_queue, model, batch_output_dir):
 
                     # 推論を実行
                     print(f"[DEBUG] Running inference for frame {frame_id}...")
-                    result = inference_mot(model, frame, frame_id=frame_id)
-
-                    # 推論結果のデバッグログ
-                    if result:
-                        print(f"[DEBUG] Inference result for frame {frame_id}: {result}")
-                    else:
-                        print(f"[WARNING] No result returned for frame {frame_id}. Skipping frame.")
+                    try:
+                        result = inference_mot(model, frame, frame_id=frame_id)
+                        if not result:
+                            print(f"[WARNING] Empty result for frame {frame_id}.")
+                            continue
+                    except Exception as e:
+                        print(f"[ERROR] Inference failed for frame {frame_id}: {str(e)}")
                         continue
 
-                    # 推論結果の解析
-                    frame_results = {"frame_id": frame_id, "persons": []}
+                    # 推論結果の確認
                     if 'track_bboxes' in result:
-                        for track in result['track_bboxes']:
-                            if len(track.shape) == 2:
-                                for t in track:
-                                    if len(t) < 6:
-                                        continue
-                                    track_id, x1, y1, x2, y2, score = t
-                                    if score < 0.5:
-                                        continue
+                        print(f"[DEBUG] Inference result for frame {frame_id}: {result['track_bboxes']}")
+                    else:
+                        print(f"[WARNING] No 'track_bboxes' in inference result for frame {frame_id}.")
+                        continue
 
-                                    # バウンディングボックスの面積
-                                    bbox_area = (x2 - x1) * (y2 - y1)
-                                    if bbox_area < MIN_BBOX_AREA:
-                                        continue
+                    # フレームごとの接近情報を生成
+                    frame_results = {"frame_id": frame_id, "persons": []}
+                    for track in result.get('track_bboxes', []):
+                        if len(track.shape) == 2:
+                            for t in track:
+                                if len(t) < 6:
+                                    continue
+                                track_id, x1, y1, x2, y2, score = t
+                                if score < 0.5:
+                                    continue
 
-                                    # 中心座標と距離計算
-                                    center_x = (x1 + x2) / 2
-                                    center_y = (y1 + y2) / 2
-                                    current_distance = calculate_distance(center_x, center_y)
+                                # バウンディングボックスの面積
+                                bbox_area = (x2 - x1) * (y2 - y1)
+                                if bbox_area < MIN_BBOX_AREA:
+                                    continue
 
-                                    # 接近状態の判定
-                                    approaching = False
-                                    if track_id in previous_distances:
-                                        prev_distance = previous_distances[track_id]
-                                        distance_change = prev_distance - current_distance
-                                        if track_id not in distance_changes:
-                                            distance_changes[track_id] = deque(maxlen=WINDOW_SIZE)
-                                        distance_changes[track_id].append(distance_change)
+                                # 中心座標と距離計算
+                                center_x = (x1 + x2) / 2
+                                center_y = (y1 + y2) / 2
+                                current_distance = calculate_distance(center_x, center_y)
 
-                                        avg_distance_change = smooth_distance_change(
-                                            distance_changes[track_id], window_size=WINDOW_SIZE
-                                        )
+                                # 接近状態の判定
+                                approaching = False
+                                if track_id in previous_distances:
+                                    prev_distance = previous_distances[track_id]
+                                    distance_change = prev_distance - current_distance
+                                    if track_id not in distance_changes:
+                                        distance_changes[track_id] = deque(maxlen=WINDOW_SIZE)
+                                    distance_changes[track_id].append(distance_change)
 
-                                        if avg_distance_change > DISTANCE_THRESHOLD:
-                                            approaching = True
+                                    avg_distance_change = smooth_distance_change(
+                                        distance_changes[track_id], window_size=WINDOW_SIZE
+                                    )
 
-                                    # 距離の記録
-                                    previous_distances[track_id] = current_distance
+                                    if avg_distance_change > DISTANCE_THRESHOLD:
+                                        approaching = True
 
-                                    # 結果に追加
-                                    frame_results["persons"].append({
-                                        "track_id": int(track_id),
-                                        "bbox": [int(x1), int(y1), int(x2), int(y2)],
-                                        "approaching": approaching
-                                    })
+                                # 距離の記録
+                                previous_distances[track_id] = current_distance
+
+                                # 結果に追加
+                                frame_results["persons"].append({
+                                    "track_id": int(track_id),
+                                    "bbox": [int(x1), int(y1), int(x2), int(y2)],
+                                    "approaching": approaching
+                                })
 
                     # フレーム結果を追加
                     results.append(frame_results)
